@@ -17,10 +17,6 @@ let game = {
 
 let timerInterval = null;
 
-function sendGameState() {
-  io.emit("game-state", game);
-}
-
 const words = [
   "apple",
   "banana",
@@ -38,32 +34,40 @@ function pickWord() {
   return words[Math.floor(Math.random() * words.length)];
 }
 
+function sendGameState() {
+  io.emit("game-state", {
+    phase: game.phase,
+    players: game.players,
+    currentTurn: game.currentTurn,
+    timeLeft: game.timeLeft,
+    roundActive: game.roundActive
+    // ❌ secretWord NOT sent
+  });
+}
+
 function startGame() {
-  game.phase =  "PLAYING";
+  game.phase = "PLAYING";
   game.currentTurn = 0;
-  game.timeLeft = 60;
-  game.roundActive = false;
   startTurn();
 }
 
 function startTurn() {
   if (game.players.length === 0) return;
 
-  game.roundActive = true;
-  game.timeLeft = 5;
+  clearInterval(timerInterval);
 
+  game.roundActive = true;
+  game.timeLeft = 50;
   game.secretWord = pickWord();
 
   sendGameState();
 
   timerInterval = setInterval(() => {
     game.timeLeft--;
-
     sendGameState();
 
     if (game.timeLeft <= 0) {
       endTurn();
-      return;
     }
   }, 1000);
 }
@@ -78,10 +82,10 @@ function endTurn() {
 
   sendGameState();
 
-  // Start next turn after 2 seconds
   setTimeout(startTurn, 2000);
 }
 
+/* ---------- SOCKET ---------- */
 io.on("connection", socket => {
 
   if (game.phase !== "LOBBY") {
@@ -97,15 +101,11 @@ io.on("connection", socket => {
     score: 0
   });
 
-  // Start game when first player joins
   socket.on("start-game", () => {
-    if (game.phase === "LOBBY") {
-      startGame();
-    }
+    if (game.phase === "LOBBY") startGame();
   });
 
   socket.on("draw", data => {
-    // Broadcast drawing to everyone except drawer
     socket.broadcast.emit("draw", data);
   });
 
@@ -113,19 +113,26 @@ io.on("connection", socket => {
     io.emit("clear-canvas");
   });
 
+  /* 🔐 SECRET WORD — drawer only */
+  socket.on("secret-word", () => {
+    const drawer = game.players[game.currentTurn];
+    if (drawer?.id === socket.id) {
+      socket.emit("secret-word", game.secretWord);
+    }
+  });
+
   sendGameState();
 
   socket.on("disconnect", () => {
     console.log("❌ Player disconnected:", socket.id);
-    game.players = game.players.filter(
-      p => p.id !== socket.id
-    );
 
+    game.players = game.players.filter(p => p.id !== socket.id);
     game.currentTurn = 0;
 
     if (game.players.length === 0) {
       clearInterval(timerInterval);
       timerInterval = null;
+      game.phase = "LOBBY";
       game.roundActive = false;
     }
 
